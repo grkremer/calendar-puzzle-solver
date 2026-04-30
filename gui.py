@@ -4,9 +4,8 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from board import BOARD, MONTHS, ROWS, COLS, INVALID, NUM_CELLS, CELL_TO_IDX, IDX_TO_CELL
-from pieces import PIECES_RAW, PIECE_SIZES, NUM_PIECES, all_orientations
-from solver import solve_with_fixed, FULL_MASK, _prepare, PIECE_CHARS
+from puzzles import PUZZLES, Puzzle, all_orientations
+from solver import solve_with_fixed, PIECE_CHARS
 
 # ── visual constants ─────────────────────────────────────────────────────────
 CELL      = 70
@@ -14,10 +13,6 @@ PAD       = 14
 MINI_CELL = 11
 MINI_SIZE = 66
 
-PIECE_COLORS = [
-    "#E74C3C", "#3498DB", "#2ECC71", "#F39C12",
-    "#9B59B6", "#1ABC9C", "#E67E22", "#2980B9",
-]
 EMPTY_BG    = "#ECF0F1"
 INVALID_BG  = "#2C3E50"
 BORDER_CLR  = "#BDC3C7"
@@ -42,8 +37,8 @@ def _lighten(h: str, f: float = 0.55) -> str:
     )
 
 
-def _sorted_orientations(piece_idx: int) -> list[frozenset]:
-    return sorted(all_orientations(PIECES_RAW[piece_idx]),
+def _sorted_orientations(puzzle: Puzzle, piece_idx: int) -> list[frozenset]:
+    return sorted(all_orientations(puzzle.pieces_raw[piece_idx]),
                   key=lambda s: sorted(s))
 
 
@@ -56,6 +51,7 @@ class App(tk.Tk):
         self.configure(bg="#F0F3F4")
 
         # solver state
+        self.puzzle: Puzzle = PUZZLES[0]
         self._solution: list[tuple[int, int]] | None = None
         self._placed:   list[tuple[int, int]] = []        # user pre-placed
 
@@ -66,7 +62,7 @@ class App(tk.Tk):
         self._hover_rc:     tuple[int, int] | None = None
 
         self._build_ui()
-        self._refresh()
+        self._on_puzzle_change()
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -79,24 +75,18 @@ class App(tk.Tk):
                  bg="#F0F3F4", fg=TEXT_DARK).grid(row=0, column=0,
                                                    columnspan=2, pady=(0, 12))
 
-        # board canvas
-        cw = COLS * CELL + 2
-        ch = ROWS * CELL + 2
-        self.canvas = tk.Canvas(outer, width=cw, height=ch,
-                                bg="white", highlightthickness=0, cursor="crosshair")
-        self.canvas.grid(row=1, column=0, padx=(0, 18), sticky="n")
-        self.canvas.bind("<Motion>",          self._on_motion)
-        self.canvas.bind("<Leave>",           self._on_leave)
-        self.canvas.bind("<Button-1>",        self._on_click)
-        self.canvas.bind("<Button-3>",        self._on_right_click)
+        # We will create the canvas dynamically as its size depends on puzzle
+        self.canvas_frame = tk.Frame(outer, bg="#F0F3F4")
+        self.canvas_frame.grid(row=1, column=0, padx=(0, 18), sticky="n")
+        self.canvas = None
 
         # right panel
-        panel = tk.Frame(outer, bg="#F0F3F4")
-        panel.grid(row=1, column=1, sticky="n")
-        self._build_controls(panel)
+        self.panel = tk.Frame(outer, bg="#F0F3F4")
+        self.panel.grid(row=1, column=1, sticky="n")
+        self._build_controls(self.panel)
 
         # status bar
-        self.status_var = tk.StringVar(value="Selecione uma peça para colocar no tabuleiro.")
+        self.status_var = tk.StringVar(value="Selecione um tabuleiro e peças para começar.")
         tk.Label(outer, textvariable=self.status_var, font=("Helvetica", 10),
                  bg="#F0F3F4", fg="#566573", anchor="w").grid(
             row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
@@ -109,11 +99,21 @@ class App(tk.Tk):
             tk.Label(parent, text=text, font=("Helvetica", 10, "bold"),
                      bg="#F0F3F4", fg=TEXT_DARK, anchor="w").pack(fill="x", pady=(6, 2))
 
+        # ── puzzle selection ─────────────────────────────────────────────────
+        lbl("Tabuleiro")
+        self.puzzle_var = tk.StringVar(value=PUZZLES[0].name)
+        puzzle_cb = ttk.Combobox(parent, textvariable=self.puzzle_var, 
+                                 values=[p.name for p in PUZZLES],
+                                 state="readonly", width=14)
+        puzzle_cb.pack()
+        puzzle_cb.bind("<<ComboboxSelected>>", lambda e: self._on_puzzle_change())
+
         # ── month / day / solve ──────────────────────────────────────────────
         lbl("Mês")
-        self.month_var = tk.StringVar(value=MONTHS[0])
-        ttk.Combobox(parent, textvariable=self.month_var, values=MONTHS,
-                     state="readonly", width=14).pack()
+        self.month_var = tk.StringVar()
+        self.month_cb = ttk.Combobox(parent, textvariable=self.month_var,
+                                     state="readonly", width=14)
+        self.month_cb.pack()
 
         lbl("Dia")
         self.day_var = tk.StringVar(value="1")
@@ -135,17 +135,9 @@ class App(tk.Tk):
                  font=("Helvetica", 10, "bold"),
                  bg="#F0F3F4", fg=TEXT_DARK).pack(anchor="w")
 
-        grid = tk.Frame(parent, bg="#F0F3F4")
-        grid.pack(pady=(4, 0))
+        self.grid_frame = tk.Frame(parent, bg="#F0F3F4")
+        self.grid_frame.pack(pady=(4, 0))
         self._piece_btns: list[tk.Canvas] = []
-        for i in range(NUM_PIECES):
-            row_f, col_f = divmod(i, 4)
-            c = tk.Canvas(grid, width=MINI_SIZE, height=MINI_SIZE,
-                          bg="#F0F3F4", highlightthickness=2,
-                          highlightbackground=BORDER_CLR, cursor="hand2")
-            c.grid(row=row_f, column=col_f, padx=3, pady=3)
-            c.bind("<Button-1>", lambda e, idx=i: self._on_piece_btn(idx))
-            self._piece_btns.append(c)
 
         # ── orientation controls ─────────────────────────────────────────────
         orient_row = tk.Frame(parent, bg="#F0F3F4")
@@ -183,6 +175,54 @@ class App(tk.Tk):
         self.legend_frame = tk.Frame(parent, bg="#F0F3F4")
         self.legend_frame.pack(fill="x")
 
+    def _on_puzzle_change(self) -> None:
+        p_name = self.puzzle_var.get()
+        self.puzzle = next(p for p in PUZZLES if p.name == p_name)
+        
+        # Reset state
+        self._placed = []
+        self._solution = None
+        self._selected = None
+        self._hover_rc = None
+        self._orientations = []
+
+        # Update Month combo
+        self.month_cb['values'] = self.puzzle.months
+        if self.month_var.get() not in self.puzzle.months:
+            self.month_var.set(self.puzzle.months[0])
+
+        # Rebuild Canvas
+        if self.canvas:
+            self.canvas.destroy()
+        cw = self.puzzle.cols * CELL + 2
+        ch = self.puzzle.rows * CELL + 2
+        self.canvas = tk.Canvas(self.canvas_frame, width=cw, height=ch,
+                                bg="white", highlightthickness=0, cursor="crosshair")
+        self.canvas.pack()
+        self.canvas.bind("<Motion>",          self._on_motion)
+        self.canvas.bind("<Leave>",           self._on_leave)
+        self.canvas.bind("<Button-1>",        self._on_click)
+        self.canvas.bind("<Button-3>",        self._on_right_click)
+
+        # Rebuild Pieces Grid
+        for child in self.grid_frame.winfo_children():
+            child.destroy()
+        self._piece_btns = []
+        for i in range(self.puzzle.num_pieces):
+            row_f, col_f = divmod(i, 4)
+            c = tk.Canvas(self.grid_frame, width=MINI_SIZE, height=MINI_SIZE,
+                          bg="#F0F3F4", highlightthickness=2,
+                          highlightbackground=BORDER_CLR, cursor="hand2")
+            c.grid(row=row_f, column=col_f, padx=3, pady=3)
+            c.bind("<Button-1>", lambda e, idx=i: self._on_piece_btn(idx))
+            self._piece_btns.append(c)
+
+        # Clear legend
+        for w in self.legend_frame.winfo_children():
+            w.destroy()
+
+        self._refresh()
+
     # ── coordinate helpers ────────────────────────────────────────────────────
 
     def _cell_bbox(self, r: int, c: int) -> tuple[int, int, int, int]:
@@ -192,7 +232,7 @@ class App(tk.Tk):
 
     def _rc_from_xy(self, x: int, y: int) -> tuple[int, int] | None:
         r, c = (y - 1) // CELL, (x - 1) // CELL
-        if 0 <= r < ROWS and 0 <= c < COLS:
+        if 0 <= r < self.puzzle.rows and 0 <= c < self.puzzle.cols:
             return r, c
         return None
 
@@ -218,33 +258,32 @@ class App(tk.Tk):
 
     def _exposed_mask(self) -> int:
         month = self.month_var.get()
-        day   = int(self.day_var.get())
+        day   = str(self.day_var.get())
         exposed = 0
-        for pos, lbl in BOARD.items():
-            if lbl == month or lbl == str(day):
-                exposed |= 1 << CELL_TO_IDX[pos]
+        for pos, lbl in self.puzzle.board.items():
+            if lbl == month or lbl == day:
+                exposed |= 1 << self.puzzle.cell_to_idx[pos]
         return exposed
 
     def _is_valid_placement(self, cells: list[tuple[int, int]]) -> bool:
         blocked = self._occupied_mask() | self._exposed_mask()
         for rc in cells:
-            if rc not in CELL_TO_IDX:
+            if rc not in self.puzzle.cell_to_idx:
                 return False
-            if (1 << CELL_TO_IDX[rc]) & blocked:
+            if (1 << self.puzzle.cell_to_idx[rc]) & blocked:
                 return False
         return True
 
     def _mask_from_cells(self, cells: list[tuple[int, int]]) -> int:
         m = 0
         for rc in cells:
-            m |= 1 << CELL_TO_IDX[rc]
+            m |= 1 << self.puzzle.cell_to_idx[rc]
         return m
 
     def _piece_at(self, r: int, c: int) -> int | None:
-        """Return index into self._placed for the piece covering (r, c), or None."""
-        if (r, c) not in CELL_TO_IDX:
+        if (r, c) not in self.puzzle.cell_to_idx:
             return None
-        bit = 1 << CELL_TO_IDX[(r, c)]
+        bit = 1 << self.puzzle.cell_to_idx[(r, c)]
         for i, (_, mask) in enumerate(self._placed):
             if mask & bit:
                 return i
@@ -261,33 +300,34 @@ class App(tk.Tk):
         self._update_controls()
 
     def _draw_board(self) -> None:
+        if not self.canvas: return
         self.canvas.delete("all")
 
         month = self.month_var.get()
-        day   = int(self.day_var.get())
-        exposed = {pos for pos, lbl in BOARD.items()
-                   if lbl == month or lbl == str(day)}
+        day   = str(self.day_var.get())
+        exposed = {pos for pos, lbl in self.puzzle.board.items()
+                   if lbl == month or lbl == day}
 
         # build cell → piece map  (solution takes priority over placed)
         cell_piece: dict[tuple[int, int], int] = {}
         source = self._solution if self._solution else self._placed
         for pi, mask in source:
-            for bit in range(NUM_CELLS):
+            for bit in range(self.puzzle.num_cells):
                 if mask & (1 << bit):
-                    cell_piece[IDX_TO_CELL[bit]] = pi
+                    cell_piece[self.puzzle.idx_to_cell[bit]] = pi
 
         # hover preview cells
         hcells = self._hover_cells()
         hover_valid = hcells is not None and self._is_valid_placement(hcells)
         hover_set   = set(map(tuple, hcells)) if hcells else set()
 
-        for r in range(ROWS):
-            for c in range(COLS):
+        for r in range(self.puzzle.rows):
+            for c in range(self.puzzle.cols):
                 x1, y1, x2, y2 = self._cell_bbox(r, c)
                 cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                lbl = BOARD.get((r, c), "")
+                lbl = self.puzzle.board.get((r, c), "")
 
-                if (r, c) in INVALID:
+                if (r, c) in self.puzzle.invalid:
                     self.canvas.create_rectangle(
                         x1, y1, x2, y2, fill=INVALID_BG, outline="#1A252F")
                     self.canvas.create_text(cx, cy, text="×",
@@ -304,7 +344,7 @@ class App(tk.Tk):
                     continue
 
                 if (r, c) in hover_set and not self._solution:
-                    col = (_lighten(PIECE_COLORS[self._selected], 0.35)
+                    col = (_lighten(self.puzzle.piece_colors[self._selected], 0.35)
                            if hover_valid else "#F1948A")
                     self.canvas.create_rectangle(
                         x1, y1, x2, y2, fill=col, outline=BORDER_CLR)
@@ -313,7 +353,7 @@ class App(tk.Tk):
                     continue
 
                 if (r, c) in cell_piece:
-                    bg = PIECE_COLORS[cell_piece[(r, c)]]
+                    bg = self.puzzle.piece_colors[cell_piece[(r, c)]]
                     fg = TEXT_LIGHT if _is_dark(bg) else TEXT_DARK
                     self.canvas.create_rectangle(
                         x1, y1, x2, y2, fill=bg, outline=BORDER_CLR)
@@ -327,8 +367,8 @@ class App(tk.Tk):
                                         font=("Helvetica", 9))
 
         # thick outlines around piece groups
-        for r in range(ROWS):
-            for c in range(COLS):
+        for r in range(self.puzzle.rows):
+            for c in range(self.puzzle.cols):
                 if (r, c) not in cell_piece:
                     continue
                 pi = cell_piece[(r, c)]
@@ -350,14 +390,13 @@ class App(tk.Tk):
     def _draw_one_btn(self, canvas: tk.Canvas, idx: int,
                       selected: bool, used: bool) -> None:
         canvas.delete("all")
-        color = "#BDC3C7" if used else PIECE_COLORS[idx]
+        color = "#BDC3C7" if used else self.puzzle.piece_colors[idx]
         canvas.configure(
             highlightbackground="#2980B9" if selected else BORDER_CLR,
             highlightthickness=2 if selected else 1,
         )
 
-        # Use normalized shape (first orientation) for the button
-        shape = sorted(all_orientations(PIECES_RAW[idx]))[0]
+        shape = sorted(all_orientations(self.puzzle.pieces_raw[idx]))[0]
         cells = list(shape)
         if not cells:
             return
@@ -406,9 +445,9 @@ class App(tk.Tk):
         for pi, _ in sorted(solution):
             row = tk.Frame(self.legend_frame, bg="#F0F3F4")
             row.pack(anchor="w", pady=1)
-            tk.Frame(row, bg=PIECE_COLORS[pi], width=16, height=16,
+            tk.Frame(row, bg=self.puzzle.piece_colors[pi], width=16, height=16,
                      relief="flat").pack(side="left", padx=(0, 6))
-            tk.Label(row, text=f"P{pi}  ({PIECE_SIZES[pi]} células)",
+            tk.Label(row, text=f"P{pi}  ({self.puzzle.piece_sizes[pi]} células)",
                      font=("Helvetica", 9), bg="#F0F3F4",
                      fg=TEXT_DARK).pack(side="left")
 
@@ -439,10 +478,10 @@ class App(tk.Tk):
         self._selected = None
         self._orientations = []
         self._hover_rc = None
-        self.canvas.configure(cursor="crosshair")
+        if self.canvas: self.canvas.configure(cursor="crosshair")
         self._refresh()
         self.status_var.set(
-            f"Peça colocada. {8 - len(self._placed)} peça(s) restante(s) para o solver.")
+            f"Peça colocada. {self.puzzle.num_pieces - len(self._placed)} peça(s) restante(s) para o solver.")
 
     def _on_right_click(self, event: tk.Event) -> None:
         if self._solution:
@@ -465,7 +504,7 @@ class App(tk.Tk):
         else:
             self._selected    = idx
             self._orient_idx  = 0
-            self._orientations = _sorted_orientations(idx)
+            self._orientations = _sorted_orientations(self.puzzle, idx)
         self._solution = None
         self._refresh()
         if self._selected is not None:
@@ -507,10 +546,11 @@ class App(tk.Tk):
         self._draw_board()
 
         fixed = list(self._placed)
+        current_puzzle = self.puzzle
 
         def run() -> None:
             t0       = time.perf_counter()
-            solution = solve_with_fixed(month, day, fixed)
+            solution = solve_with_fixed(current_puzzle, month, day, fixed)
             elapsed  = time.perf_counter() - t0
             self.after(0, lambda: self._on_result(solution, month, day, elapsed))
 
