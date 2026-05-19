@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Calendar Puzzle Solver</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1>Calendar Puzzle Solver</h1>
+      <select id="puzzle-select">
+        <option value="classic">Puzzle Clássico (PT)</option>
+        <option value="puzzle_b">Puzzle B (EN)</option>
+      </select>
+    </header>
+
+    <main class="main">
+      <div id="board-wrapper">
+        <div id="board" class="board"></div>
+      </div>
+
+      <aside class="controls">
+
+        <section>
+          <label class="field-label">Mês
+            <select id="month-select"></select>
+          </label>
+          <label class="field-label">Dia
+            <select id="day-select"></select>
+          </label>
+          <button id="btn-solve" class="btn-primary">🔍 Resolver</button>
+        </section>
+
+        <hr>
+
+        <section>
+          <p class="section-title">Peças — clique para selecionar</p>
+          <div id="piece-buttons" class="piece-grid"></div>
+          <div class="orient-row">
+            <button id="btn-rotate" disabled>↺ Rotacionar</button>
+            <span id="orient-label" class="orient-label"></span>
+          </div>
+        </section>
+
+        <hr>
+
+        <section>
+          <div class="action-row">
+            <button id="btn-undo" disabled>↩ Desfazer</button>
+            <button id="btn-reset">🗑 Limpar</button>
+          </div>
+        </section>
+
+        <p id="status" class="status">Carregando…</p>
+
+        <div id="legend" class="legend"></div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="/static/main.js"></script>
+</body>
+</html>
